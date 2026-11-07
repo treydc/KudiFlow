@@ -1,0 +1,6 @@
+{
+  "name": "KudiFlow",
+  "description": "KudiFlow - Professional invoicing web application with client management and printable PDF invoices.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
