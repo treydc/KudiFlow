@@ -14,10 +14,15 @@ import {
   Calendar,
   Building2,
   X,
-  ChevronRight
+  ChevronRight,
+  Link,
+  Link2,
+  Copy,
+  ExternalLink,
+  Check
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { getSupabase } from '../lib/supabase';
+import { getSupabase, getSupabaseCredentials } from '../lib/supabase';
 import { InvoiceStatus } from '../types/database';
 import { generateInvoicePdf, getStoredBusinessProfile, cleanBrandName } from '../utils/generatePdf';
 
@@ -47,6 +52,8 @@ interface InvoiceDisplay {
   issue_date: string;
   due_date: string;
   status: InvoiceStatus;
+  payment_link?: string | null;
+  paid_at?: string | null;
   items?: InvoiceItemRecord[];
   created_at?: string;
 }
@@ -64,6 +71,8 @@ const INITIAL_DEMO_INVOICES: InvoiceDisplay[] = [
     issue_date: '2026-10-15',
     due_date: '2026-11-15',
     status: 'paid',
+    payment_link: null,
+    paid_at: '2026-10-18T14:30:00Z',
     items: [
       { description: 'Fleet Management System Integration', quantity: 1, unit_price: 950000 },
       { description: 'Cloud Infrastructure & Maintenance', quantity: 2, unit_price: 250000 },
@@ -81,6 +90,8 @@ const INITIAL_DEMO_INVOICES: InvoiceDisplay[] = [
     issue_date: '2026-10-28',
     due_date: '2026-11-28',
     status: 'sent',
+    payment_link: 'https://checkout.paystack.com/kudiflow-inv-0002',
+    paid_at: null,
     items: [
       { description: 'Payment Flow UX Redesign', quantity: 1, unit_price: 825000 },
     ],
@@ -97,6 +108,8 @@ const INITIAL_DEMO_INVOICES: InvoiceDisplay[] = [
     issue_date: '2026-11-01',
     due_date: '2026-12-01',
     status: 'draft',
+    payment_link: null,
+    paid_at: null,
     items: [
       { description: 'Enterprise Security Audit', quantity: 1, unit_price: 2000000 },
       { description: 'Penetration Testing & Compliance Report', quantity: 1, unit_price: 1200000 },
@@ -114,6 +127,8 @@ const INITIAL_DEMO_INVOICES: InvoiceDisplay[] = [
     issue_date: '2026-09-20',
     due_date: '2026-10-20',
     status: 'overdue',
+    payment_link: null,
+    paid_at: null,
     items: [
       { description: 'Server Migration Retainer - September', quantity: 1, unit_price: 540000 },
     ],
@@ -149,6 +164,31 @@ export const InvoicesView: React.FC = () => {
 
   // Detail view modal
   const [viewingInvoice, setViewingInvoice] = useState<InvoiceDisplay | null>(null);
+
+  // Payment link states
+  const [creatingLinkId, setCreatingLinkId] = useState<string | null>(null);
+  const [paymentLinkError, setPaymentLinkError] = useState<string | null>(null);
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
+
+  // Helper to format payment date nicely
+  const formatPaidAt = (paidAt?: string | null, fallbackDate?: string): string => {
+    if (paidAt) {
+      try {
+        const d = new Date(paidAt);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          });
+        }
+        return paidAt;
+      } catch {
+        return paidAt;
+      }
+    }
+    return fallbackDate || '';
+  };
 
   // Create Invoice Modal states
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -189,8 +229,9 @@ export const InvoicesView: React.FC = () => {
         setClients(clientsData);
       }
 
-      // 2. Fetch user's invoices with invoice_items and client data (enforced by RLS user_id = auth.uid())
-      const { data: invoicesData, error: invErr } = await (supabase.from('invoices') as any)
+      // 2. Fetch user's invoices with payment_link, paid_at, invoice_items, and client data
+      let invoicesData: any = null;
+      const { data: invWithLinks, error: invErrWithLinks } = await (supabase.from('invoices') as any)
         .select(`
           id,
           invoice_number,
@@ -200,16 +241,43 @@ export const InvoicesView: React.FC = () => {
           due_date,
           currency,
           total,
+          payment_link,
+          paid_at,
           created_at,
           clients (id, name, email, address),
           invoice_items (id, description, quantity, unit_price)
         `)
         .order('created_at', { ascending: false });
 
-      if (invErr) {
-        console.warn('Invoices fetch error:', invErr);
-        setErrorMessage("Couldn't load your invoices. Please try again.");
-      } else if (invoicesData) {
+      if (invErrWithLinks) {
+        console.warn('Invoices fetch notice, trying fallback without payment fields:', invErrWithLinks);
+        const { data: fallbackData, error: fallbackErr } = await (supabase.from('invoices') as any)
+          .select(`
+            id,
+            invoice_number,
+            client_id,
+            status,
+            issue_date,
+            due_date,
+            currency,
+            total,
+            created_at,
+            clients (id, name, email, address),
+            invoice_items (id, description, quantity, unit_price)
+          `)
+          .order('created_at', { ascending: false });
+
+        if (fallbackErr) {
+          console.warn('Invoices fallback fetch error:', fallbackErr);
+          setErrorMessage("Couldn't load your invoices. Please try again.");
+        } else {
+          invoicesData = fallbackData;
+        }
+      } else {
+        invoicesData = invWithLinks;
+      }
+
+      if (invoicesData) {
         const mapped: InvoiceDisplay[] = invoicesData.map((inv: any) => ({
           id: inv.id,
           invoice_number: inv.invoice_number,
@@ -222,10 +290,19 @@ export const InvoicesView: React.FC = () => {
           issue_date: inv.issue_date,
           due_date: inv.due_date,
           status: inv.status as InvoiceStatus,
+          payment_link: inv.payment_link || null,
+          paid_at: inv.paid_at || null,
           items: Array.isArray(inv.invoice_items) ? inv.invoice_items : [],
           created_at: inv.created_at,
         }));
         setInvoices(mapped);
+
+        // Keep open viewingInvoice in sync with latest status/payment info
+        setViewingInvoice((current) => {
+          if (!current) return null;
+          const updated = mapped.find((item) => item.id === current.id);
+          return updated || current;
+        });
       }
     } catch (err: any) {
       console.error('Error loading invoices data:', err);
@@ -238,6 +315,107 @@ export const InvoicesView: React.FC = () => {
   useEffect(() => {
     loadDataFromSupabase();
   }, [loadDataFromSupabase]);
+
+  // Refresh invoice status when the window or tab regains focus
+  useEffect(() => {
+    const handleFocus = () => {
+      loadDataFromSupabase();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadDataFromSupabase();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [loadDataFromSupabase]);
+
+  // Create payment link via Supabase Edge Function create-payment-link
+  const handleCreatePaymentLink = async (invoiceId: string) => {
+    setPaymentLinkError(null);
+    setCreatingLinkId(invoiceId);
+
+    try {
+      const supabase = getSupabase();
+      let link: string | null = null;
+
+      if (supabase && isConfigured) {
+        const { data, error } = await supabase.functions.invoke('create-payment-link', {
+          body: { invoice_id: invoiceId },
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        link =
+          data?.payment_link ||
+          data?.url ||
+          data?.link ||
+          data?.data?.authorization_url ||
+          data?.data?.payment_link ||
+          (typeof data === 'string' && data.startsWith('http') ? data : null);
+
+        if (!link) {
+          throw new Error('Payment link was not returned');
+        }
+
+        // Persist to invoices table if column exists
+        try {
+          await (supabase.from('invoices') as any)
+            .update({ payment_link: link })
+            .eq('id', invoiceId);
+        } catch (dbErr) {
+          console.warn('Notice saving payment_link to table:', dbErr);
+        }
+      } else {
+        // Demo fallback link
+        link = `https://checkout.paystack.com/kudiflow-${invoiceId.slice(-6)}`;
+      }
+
+      setInvoices((prev) =>
+        prev.map((inv) => (inv.id === invoiceId ? { ...inv, payment_link: link } : inv))
+      );
+
+      setViewingInvoice((current) => {
+        if (current && current.id === invoiceId) {
+          return { ...current, payment_link: link };
+        }
+        return current;
+      });
+    } catch (err: any) {
+      console.error('Error creating payment link:', err);
+      setPaymentLinkError("Couldn't create the payment link. Please try again.");
+    } finally {
+      setCreatingLinkId(null);
+    }
+  };
+
+  const handleCopyLink = async (link: string, id: string) => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link);
+      } else {
+        const el = document.createElement('textarea');
+        el.value = link;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      }
+      setCopiedLinkId(id);
+      setTimeout(() => setCopiedLinkId(null), 2000);
+    } catch {
+      setPaymentLinkError("Couldn't copy link. Please copy it manually.");
+    }
+  };
 
   // Open Create Invoice Modal & Auto-Generate Sequential Invoice Number per user
   const handleOpenCreateModal = () => {
@@ -392,20 +570,25 @@ export const InvoicesView: React.FC = () => {
     setShowCreateModal(false);
   };
 
-  // UPDATE INVOICE STATUS
-  const handleUpdateStatus = async (invoiceId: string, newStatus: InvoiceStatus) => {
+  // UPDATE INVOICE STATUS (Manual changes restricted to draft, sent, and overdue; paid is handled exclusively by payment system)
+  const handleUpdateStatus = async (invoiceId: string, newStatus: 'draft' | 'sent' | 'overdue') => {
+    setErrorMessage(null);
     const supabase = getSupabase();
     if (supabase && isConfigured) {
       try {
         const { data: userData } = await supabase.auth.getUser();
         if (userData?.user) {
-          await (supabase.from('invoices') as any)
+          const { error } = await (supabase.from('invoices') as any)
             .update({ status: newStatus })
             .eq('id', invoiceId);
+          if (error) {
+            setErrorMessage("Couldn't update invoice status. Please try again.");
+            return;
+          }
         }
-      } catch (err) {
-        console.warn('Error updating status in Supabase:', err);
-        setErrorMessage("Couldn't update the invoice. Please try again.");
+      } catch {
+        setErrorMessage("Couldn't update invoice status. Please try again.");
+        return;
       }
     }
 
@@ -657,6 +840,61 @@ export const InvoicesView: React.FC = () => {
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="flex items-center justify-center gap-1">
+                        {/* Unpaid: Show Create payment link or Copy/Open if link already exists */}
+                        {inv.status !== 'paid' && (
+                          inv.payment_link ? (
+                            <div className="flex items-center gap-1 mr-1">
+                              <button
+                                type="button"
+                                onClick={() => handleCopyLink(inv.payment_link!, inv.id)}
+                                title={copiedLinkId === inv.id ? 'Copied link!' : 'Copy payment link'}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-emerald-400 text-[11px] font-medium transition-colors cursor-pointer"
+                              >
+                                {copiedLinkId === inv.id ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                    <span>Copied</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    <span>Copy link</span>
+                                  </>
+                                )}
+                              </button>
+                              <a
+                                href={inv.payment_link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Open payment link"
+                                className="p-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors cursor-pointer inline-flex items-center"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleCreatePaymentLink(inv.id)}
+                              disabled={creatingLinkId === inv.id}
+                              title="Create payment link"
+                              className="mr-1 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700/80 text-neutral-200 hover:text-white text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-50"
+                            >
+                              {creatingLinkId === inv.id ? (
+                                <>
+                                  <div className="w-2.5 h-2.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                  <span>Creating...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Link className="w-3 h-3 text-emerald-400" />
+                                  <span>Create payment link</span>
+                                </>
+                              )}
+                            </button>
+                          )
+                        )}
+
                         <button
                           type="button"
                           onClick={() => setViewingInvoice(inv)}
@@ -824,12 +1062,11 @@ export const InvoicesView: React.FC = () => {
                   </label>
                   <select
                     value={invoiceStatus}
-                    onChange={(e) => setInvoiceStatus(e.target.value as InvoiceStatus)}
+                    onChange={(e) => setInvoiceStatus(e.target.value as 'draft' | 'sent' | 'overdue')}
                     className="w-full bg-neutral-950 border border-neutral-800 rounded-md px-3 py-1.5 text-xs text-neutral-100 focus:outline-none focus:border-neutral-600"
                   >
                     <option value="draft">Draft</option>
                     <option value="sent">Sent</option>
-                    <option value="paid">Paid</option>
                     <option value="overdue">Overdue</option>
                   </select>
                 </div>
@@ -994,6 +1231,112 @@ export const InvoicesView: React.FC = () => {
 
               {/* Modal Document Body */}
               <div className="p-4 sm:p-6 max-h-[75vh] overflow-y-auto bg-neutral-900">
+                {errorMessage && (
+                  <div className="mb-4 px-3 py-2 bg-red-950/40 border border-red-900/50 rounded-md text-xs text-red-300 flex items-center justify-between">
+                    <span>{errorMessage}</span>
+                    <button
+                      type="button"
+                      onClick={() => setErrorMessage(null)}
+                      className="text-red-400 hover:text-red-200 ml-2 cursor-pointer text-xs"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {/* Online Payment Link Card (Only shown for unpaid invoices; hidden when paid) */}
+                {viewingInvoice.status !== 'paid' && (
+                  <div className="mb-4 p-3.5 bg-neutral-950 border border-neutral-800 rounded-md">
+                    {paymentLinkError && (
+                      <div className="mb-3 px-3 py-2 bg-red-950/40 border border-red-900/50 rounded text-xs text-red-300 flex items-center justify-between">
+                        <span>{paymentLinkError}</span>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentLinkError(null)}
+                          className="text-red-400 hover:text-red-200 ml-2 cursor-pointer text-xs"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+
+                    {viewingInvoice.payment_link ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs font-medium text-white flex items-center gap-1.5">
+                            <Link2 className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Online Payment Link</span>
+                          </div>
+                          <span className="text-[11px] text-emerald-400 font-medium">Ready for payment</span>
+                        </div>
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                          <div className="flex-1 min-w-0 bg-neutral-900 border border-neutral-800 rounded px-2.5 py-1.5 text-xs text-neutral-300 font-mono truncate select-all">
+                            {viewingInvoice.payment_link}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyLink(viewingInvoice.payment_link!, viewingInvoice.id)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-medium rounded transition-colors cursor-pointer"
+                            >
+                              {copiedLinkId === viewingInvoice.id ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span>Copied</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3.5 h-3.5" />
+                                  <span>Copy link</span>
+                                </>
+                              )}
+                            </button>
+                            <a
+                              href={viewingInvoice.payment_link}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-200 hover:text-white text-xs font-medium rounded transition-colors cursor-pointer"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              <span>Open</span>
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-medium text-white flex items-center gap-1.5">
+                            <Link2 className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Online Payment Link</span>
+                          </div>
+                          <p className="text-[11px] text-neutral-400 mt-0.5">
+                            Create a secure checkout link so your client can pay this invoice online.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCreatePaymentLink(viewingInvoice.id)}
+                          disabled={creatingLinkId === viewingInvoice.id}
+                          className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-xs font-medium rounded transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+                        >
+                          {creatingLinkId === viewingInvoice.id ? (
+                            <>
+                              <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              <span>Creating link...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Link className="w-3.5 h-3.5" />
+                              <span>Create payment link</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Print-friendly white document preview matching PDF 1:1 */}
                 <div className="bg-white text-slate-900 rounded-md p-6 sm:p-8 border border-slate-200 font-sans space-y-5">
                   {/* Header: Logo and KudiFlow name on the left, Status badge on the right */}
@@ -1151,7 +1494,7 @@ export const InvoicesView: React.FC = () => {
                       {viewingInvoice.status === 'paid' ? (
                         <div className="p-3 bg-[#ecfdf5] rounded-md border border-[#a7f3d0] border-l-2 border-l-[#047857] text-xs space-y-1">
                           <div className="font-semibold text-[#047857] text-xs">
-                            Payment received on {viewingInvoice.due_date || viewingInvoice.issue_date}
+                            Payment received on {formatPaidAt(viewingInvoice.paid_at, viewingInvoice.due_date || viewingInvoice.issue_date)}
                           </div>
                           <div className="text-[11px] text-emerald-800 tabular-nums">
                             Payment Reference: {viewingInvoice.invoice_number}
@@ -1186,6 +1529,20 @@ export const InvoicesView: React.FC = () => {
                               <span className="font-medium text-[#047857] tabular-nums">{viewingInvoice.invoice_number}</span>
                             </div>
                           </div>
+                          {viewingInvoice.payment_link && (
+                            <div className="pt-2 border-t border-slate-200 mt-2 flex items-center justify-between text-[11px]">
+                              <span className="text-slate-500">Pay online:</span>
+                              <a
+                                href={viewingInvoice.payment_link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium text-[#047857] hover:underline inline-flex items-center gap-1"
+                              >
+                                <span>Pay online now</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1223,11 +1580,16 @@ export const InvoicesView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Status Change Footer Controls */}
+              {/* Status Change Footer Controls (Only Draft, Sent, Overdue can be set manually. Paid is handled by the payment system) */}
               <div className="px-5 py-3 bg-neutral-950 border-t border-neutral-800 flex flex-wrap items-center justify-between gap-3 text-xs">
                 <div className="flex items-center gap-1.5 text-neutral-400">
                   <span className="text-[11px]">Status:</span>
-                  {(['draft', 'sent', 'paid', 'overdue'] as const).map((st) => (
+                  {viewingInvoice.status === 'paid' && (
+                    <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-950/40 text-emerald-300 border border-emerald-900/50">
+                      Paid
+                    </span>
+                  )}
+                  {(['draft', 'sent', 'overdue'] as const).map((st) => (
                     <button
                       key={st}
                       type="button"

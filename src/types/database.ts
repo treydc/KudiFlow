@@ -48,6 +48,8 @@ export interface InvoiceRow {
   due_date: string;
   currency: string;
   total: number;
+  payment_link?: string | null;
+  paid_at?: string | null;
   created_at: string;
   updated_at?: string;
 }
@@ -62,6 +64,8 @@ export interface InvoiceInsert {
   due_date: string;
   currency?: string;
   total?: number;
+  payment_link?: string | null;
+  paid_at?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -76,6 +80,8 @@ export interface InvoiceUpdate {
   due_date?: string;
   currency?: string;
   total?: number;
+  payment_link?: string | null;
+  paid_at?: string | null;
   created_at?: string;
   updated_at?: string;
 }

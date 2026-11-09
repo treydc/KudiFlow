@@ -3,8 +3,6 @@ import { User, Session, AuthError } from '@supabase/supabase-js';
 import {
   getSupabase,
   isSupabaseConfigured,
-  saveSupabaseCredentials,
-  clearSupabaseCredentials,
   resetSupabaseClient,
   getSupabaseCredentials,
   DemoUser
@@ -19,8 +17,6 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<{ error: AuthError | Error | null }>;
   signUp: (email: string, password: string) => Promise<{ error: AuthError | Error | null; message?: string }>;
   signOut: () => Promise<void>;
-  updateCredentials: (url: string, anonKey: string) => void;
-  disconnectSupabase: () => void;
   signInWithDemo: (demoEmail?: string) => void;
 }
 
@@ -213,20 +209,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSession(null);
   }, [isConfigured]);
 
-  const updateCredentials = useCallback((url: string, anonKey: string) => {
-    saveSupabaseCredentials(url, anonKey);
-    resetSupabaseClient();
-    setIsConfigured(isSupabaseConfigured());
-    setCredentials(getSupabaseCredentials());
-  }, []);
-
-  const disconnectSupabase = useCallback(() => {
-    clearSupabaseCredentials();
-    resetSupabaseClient();
-    setIsConfigured(false);
-    setCredentials({ url: '', anonKey: '' });
-  }, []);
-
   const signInWithDemo = useCallback((demoEmail = 'finance@kudiflow.app') => {
     const demoUser: DemoUser = {
       id: 'demo-user-master',
@@ -248,8 +230,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signIn,
         signUp,
         signOut,
-        updateCredentials,
-        disconnectSupabase,
         signInWithDemo,
       }}
     >

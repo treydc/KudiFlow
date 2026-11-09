@@ -74,6 +74,8 @@ export interface InvoicePdfData {
   client_name: string;
   client_email?: string;
   client_address?: string | null;
+  payment_link?: string | null;
+  paid_at?: string | null;
   items?: {
     description: string;
     quantity: number;
@@ -493,9 +495,29 @@ export function generateInvoicePdf(data: InvoicePdfData): void {
   // 4. Lower Section: Totals Box on Right, Payment Instructions / Paid Banner on Left
   const blockY = finalY + 8;
 
+  // Helper to format payment date nicely
+  const formatPaidDate = (paidAt?: string | null, fallbackDate?: string): string => {
+    if (paidAt) {
+      try {
+        const d = new Date(paidAt);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          });
+        }
+        return paidAt;
+      } catch {
+        return paidAt;
+      }
+    }
+    return fallbackDate || '';
+  };
+
   // Left Side: Payment Instructions (if unpaid) OR Green Banner (if paid)
   const paymentWidth = 94;
-  const paymentHeight = 38;
+  const paymentHeight = isPaid ? 38 : (data.payment_link ? 43 : 38);
 
   if (isPaid) {
     // Green Banner: "Payment received on [date]" with payment reference
@@ -516,11 +538,11 @@ export function generateInvoicePdf(data: InvoicePdfData): void {
     doc.line(margin + 6.3, blockY + 9, margin + 7.3, blockY + 10.1);
     doc.line(margin + 7.3, blockY + 10.1, margin + 8.8, blockY + 7.8);
 
-    // Green banner title: "Payment received on [date]"
+    // Green banner title: "Payment received on [paid_at]"
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
     doc.setTextColor(4, 120, 87);
-    const paymentDate = data.due_date || data.issue_date;
+    const paymentDate = formatPaidDate(data.paid_at, data.due_date || data.issue_date);
     doc.text(`Payment received on ${paymentDate}`, margin + 12.5, blockY + 9.8);
 
     // Payment Reference line
@@ -552,7 +574,7 @@ export function generateInvoicePdf(data: InvoicePdfData): void {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
-    doc.text('Please transfer to the following account:', margin + 6, blockY + 11);
+    doc.text('Please transfer to the following account or pay online:', margin + 6, blockY + 11);
 
     // Each field clearly on its own line with generous spacing
     const labelX = margin + 6;
@@ -589,6 +611,21 @@ export function generateInvoicePdf(data: InvoicePdfData): void {
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(4, 120, 87); // Dark green reference
     doc.text(data.invoice_number, valueX, blockY + 33.5);
+
+    // Line 5 (if payment_link exists): Pay online link
+    if (data.payment_link) {
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(100, 116, 139);
+      doc.text('Pay online:', labelX, blockY + 38.8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(4, 120, 87); // #047857 Dark green
+      const linkLabel = 'Pay online now';
+      doc.textWithLink(linkLabel, valueX, blockY + 38.8, { url: data.payment_link });
+      const linkW = doc.getTextWidth(linkLabel);
+      doc.setDrawColor(4, 120, 87);
+      doc.setLineWidth(0.2);
+      doc.line(valueX, blockY + 39.5, valueX + linkW, blockY + 39.5);
+    }
   }
 
   // Right Side: Totals Box with Subtotal and larger bold Total

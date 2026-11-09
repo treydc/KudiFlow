@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS public.invoices (
     due_date DATE NOT NULL,
     currency TEXT NOT NULL DEFAULT 'NGN',
     total NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+    payment_link TEXT,
+    paid_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -136,31 +138,11 @@ CREATE POLICY "Users can delete invoice items for their invoices"
     );
 `;
 
-// Get credentials from environment variables or localStorage
+// Get credentials exclusively from environment variables
 export function getSupabaseCredentials(): { url: string; anonKey: string } {
-  const envUrl = import.meta.env.VITE_SUPABASE_URL;
-  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  const localUrl = typeof window !== 'undefined' ? localStorage.getItem('kudiflow_supabase_url') : null;
-  const localKey = typeof window !== 'undefined' ? localStorage.getItem('kudiflow_supabase_anon_key') : null;
-
-  const url = (localUrl || envUrl || '').trim();
-  const anonKey = (localKey || envKey || '').trim();
-
-  return { url, anonKey };
-}
-
-export function saveSupabaseCredentials(url: string, anonKey: string): void {
-  if (typeof window !== 'undefined') {
-    if (url) localStorage.setItem('kudiflow_supabase_url', url.trim());
-    if (anonKey) localStorage.setItem('kudiflow_supabase_anon_key', anonKey.trim());
-  }
-}
-
-export function clearSupabaseCredentials(): void {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem('kudiflow_supabase_url');
-    localStorage.removeItem('kudiflow_supabase_anon_key');
-  }
+  const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
+  const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+  return { url: envUrl, anonKey: envKey };
 }
 
 export function isSupabaseConfigured(): boolean {
